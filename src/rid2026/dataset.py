@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import h5py
@@ -12,6 +14,24 @@ from .waveforms import RML2018_MODULATIONS
 
 def complex_to_iq(x: np.ndarray) -> np.ndarray:
     return np.stack((x.real, x.imag), axis=-2).astype(np.float32)
+
+
+_WORKER_GENERATOR: RID2026DatasetGenerator | None = None
+
+
+def _initialize_worker(config: dict) -> None:
+    global _WORKER_GENERATOR
+    _WORKER_GENERATOR = RID2026DatasetGenerator(config)
+
+
+def _generate_worker_batch(task: tuple) -> tuple[tuple[int, int, int, int], dict]:
+    if _WORKER_GENERATOR is None:
+        raise RuntimeError("RID2026 worker was not initialized")
+    mod_index, modulation, esn0_index, esn0_db, start, stop = task
+    batch = _WORKER_GENERATOR._generate_batch(
+        mod_index, modulation, esn0_index, esn0_db, range(start, stop)
+    )
+    return (mod_index, esn0_index, start, stop), batch
 
 
 class RID2026DatasetGenerator:
@@ -28,6 +48,12 @@ class RID2026DatasetGenerator:
         self.examples_per_condition = int(config["examples_per_condition"])
         if self.examples_per_condition < 1:
             raise ValueError("examples_per_condition must be positive")
+        self.workers = int(config.get("workers", 1))
+        if self.workers < 1:
+            raise ValueError("workers must be positive")
+        self.compression = config.get("compression")
+        if self.compression not in {None, "gzip", "lzf"}:
+            raise ValueError("compression must be null, gzip, or lzf")
         self.modulations = tuple(
             config["signal"].get("modulations") or RML2018_MODULATIONS
         )
@@ -40,7 +66,11 @@ class RID2026DatasetGenerator:
             * self.examples_per_condition
         )
 
-    def generate(self, output_file: str | Path) -> None:
+    def generate(
+        self,
+        output_file: str | Path,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         output = Path(output_file)
         if output.suffix.lower() not in {".h5", ".hdf5"}:
             raise ValueError("output_file must end with .h5 or .hdf5")
@@ -49,27 +79,63 @@ class RID2026DatasetGenerator:
 
         with h5py.File(temporary, "w") as handle:
             datasets = self._create_datasets(handle)
-            for mod_index, modulation in enumerate(self.modulations):
-                for esn0_index, esn0_db in enumerate(self.esn0_values):
-                    for start in range(
-                        0, self.examples_per_condition, self.write_batch_size
-                    ):
-                        stop = min(
-                            start + self.write_batch_size,
-                            self.examples_per_condition,
-                        )
-                        batch = self._generate_batch(
-                            mod_index,
-                            modulation,
-                            esn0_index,
-                            esn0_db,
-                            range(start, stop),
-                        )
-                        selection = (mod_index, esn0_index, slice(start, stop))
-                        for name, values in batch.items():
-                            datasets[name][selection] = values
+            completed = 0
+            for location, batch in self._iter_batches():
+                mod_index, esn0_index, start, stop = location
+                selection = (mod_index, esn0_index, slice(start, stop))
+                for name, values in batch.items():
+                    datasets[name][selection] = values
+                completed += stop - start
+                if progress is not None:
+                    progress(completed, self.example_count())
 
         temporary.replace(output)
+
+    def _tasks(self) -> Iterator[tuple]:
+        for mod_index, modulation in enumerate(self.modulations):
+            for esn0_index, esn0_db in enumerate(self.esn0_values):
+                for start in range(
+                    0, self.examples_per_condition, self.write_batch_size
+                ):
+                    stop = min(
+                        start + self.write_batch_size, self.examples_per_condition
+                    )
+                    yield (
+                        mod_index, modulation, esn0_index, esn0_db, start, stop
+                    )
+
+    def _iter_batches(self) -> Iterator[tuple[tuple[int, int, int, int], dict]]:
+        if self.workers == 1:
+            for task in self._tasks():
+                mod_index, modulation, esn0_index, esn0_db, start, stop = task
+                yield (mod_index, esn0_index, start, stop), self._generate_batch(
+                    mod_index,
+                    modulation,
+                    esn0_index,
+                    esn0_db,
+                    range(start, stop),
+                )
+            return
+
+        tasks = iter(self._tasks())
+        with ProcessPoolExecutor(
+            max_workers=self.workers,
+            initializer=_initialize_worker,
+            initargs=(self.config,),
+        ) as executor:
+            pending = set()
+            for _ in range(self.workers * 2):
+                task = next(tasks, None)
+                if task is None:
+                    break
+                pending.add(executor.submit(_generate_worker_batch, task))
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    yield future.result()
+                    task = next(tasks, None)
+                    if task is not None:
+                        pending.add(executor.submit(_generate_worker_batch, task))
 
     def _create_datasets(self, handle: h5py.File) -> dict[str, h5py.Dataset]:
         modulation_dtype = h5py.string_dtype(encoding="utf-8")
@@ -89,21 +155,23 @@ class RID2026DatasetGenerator:
         )
         batch_chunk = min(self.write_batch_size, self.examples_per_condition)
         signal_chunks = (1, 1, batch_chunk, 2, self.frame_length)
-        common = {"compression": "gzip", "shuffle": True}
+        storage_options = {"compression": self.compression}
+        if self.compression is not None:
+            storage_options["shuffle"] = True
         datasets = {
             "y_rx": handle.create_dataset(
                 "y_rx",
                 shape=leading + (2, self.frame_length),
                 dtype="f4",
                 chunks=signal_chunks,
-                **common,
+                **storage_options,
             ),
             "x_ref": handle.create_dataset(
                 "x_ref",
                 shape=leading + (2, self.frame_length),
                 dtype="f4",
                 chunks=signal_chunks,
-                **common,
+                **storage_options,
             ),
         }
 
@@ -124,15 +192,14 @@ class RID2026DatasetGenerator:
                 shape=leading,
                 dtype=dtype,
                 chunks=scalar_chunks,
-                compression="gzip",
-                shuffle=True,
+                **storage_options,
             )
         datasets["channel_taps"] = parameters.create_dataset(
             "channel_taps",
             shape=leading + (self.max_taps, 2),
             dtype="f4",
             chunks=(1, 1, batch_chunk, self.max_taps, 2),
-            **common,
+            **storage_options,
         )
         return datasets
 

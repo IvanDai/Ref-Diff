@@ -165,7 +165,9 @@ conda run -n rfsig python experiments/00_generate_rid2026/run.py \
 ```
 
 生成器按 batch 流式写入一个 HDF5 文件，不会在内存中保存
-2,555,904 条 record。文件结构为：
+2,555,904 条 record。多个 worker 进程并行生成信号，主进程独占写入
+HDF5；待处理 batch 数量有界，不会随数据集规模增长。`workers` 和
+`write_batch_size` 分别控制并行度和单个任务大小。文件结构为：
 
 ```text
 rid2026.h5
@@ -210,6 +212,8 @@ sample_esn0_db = esn0_db[s]
 `M=24`、`S=26`、`E=4096`。两个 IQ 数组未压缩时约占 `39.0 GiB`；
 另有约 `0.61 GiB` 的 channel taps 和少量标量参数。文件不保存
 `x_tx`、split、seed、profile、attrs 或生成配置副本。数据划分由下游使用者完成。
+存储压缩由 `compression` 可选配置：`null` 不压缩，`gzip` 或 `lzf`
+启用对应 HDF5 压缩器。
 
 ## 测试与诊断
 

@@ -80,12 +80,53 @@ def test_dataset_generator_writes_complete_contract(tmp_path: Path):
         assert not handle.attrs
         assert handle["y_rx"].shape == (1, 1, 3, 2, 128)
         assert handle["x_ref"].shape == handle["y_rx"].shape
+        assert handle["y_rx"].compression is None
+        assert handle["x_ref"].compression is None
         assert "x_tx" not in handle
         assert set(handle["parameters"]) == {
             "samples_per_symbol", "rrc_alpha", "timing_offset",
             "symbol_rate_offset", "phase_offset", "carrier_offset",
             "delay_spread", "channel_path_count", "channel_taps",
         }
+
+
+def test_parallel_generation_matches_serial_generation(tmp_path: Path):
+    config = load_test_config()
+    config["signal"]["frame_length"] = 128
+    config["signal"]["modulations"] = ["BPSK"]
+    config["impairments"]["esn0_db"] = [0]
+    config["examples_per_condition"] = 4
+    serial_path = tmp_path / "serial.h5"
+    parallel_path = tmp_path / "parallel.h5"
+
+    config["workers"] = 1
+    RID2026DatasetGenerator(config).generate(serial_path)
+    config["workers"] = 2
+    RID2026DatasetGenerator(config).generate(parallel_path)
+
+    with h5py.File(serial_path, "r") as serial, h5py.File(parallel_path, "r") as parallel:
+        for name in ("y_rx", "x_ref"):
+            np.testing.assert_array_equal(serial[name][:], parallel[name][:])
+        for name in serial["parameters"]:
+            np.testing.assert_array_equal(
+                serial["parameters"][name][:], parallel["parameters"][name][:]
+            )
+
+
+def test_gzip_compression_remains_available(tmp_path: Path):
+    config = load_test_config()
+    config["signal"]["frame_length"] = 128
+    config["signal"]["modulations"] = ["BPSK"]
+    config["impairments"]["esn0_db"] = [0]
+    config["examples_per_condition"] = 1
+    config["compression"] = "gzip"
+    output = tmp_path / "compressed.h5"
+
+    RID2026DatasetGenerator(config).generate(output)
+
+    with h5py.File(output, "r") as handle:
+        assert handle["y_rx"].compression == "gzip"
+        assert handle["x_ref"].compression == "gzip"
 
 
 def test_full_configuration_matches_rml2018_scale():

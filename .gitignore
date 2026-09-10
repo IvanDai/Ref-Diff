@@ -47,6 +47,7 @@ checkpoints/
 runs/
 wandb/
 tensorboard/
+experiments/**/outputs/
 *.ckpt
 *.pth
 *.pt

@@ -1,6 +1,8 @@
 seed: 233
 write_batch_size: 4
 examples_per_condition: 4096
+workers: 1
+compression: null
 
 signal:
   frame_length: 1024
