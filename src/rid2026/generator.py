@@ -42,11 +42,13 @@ class SignalConfig:
 
 @dataclass(frozen=True)
 class WaveformParameters:
+    frame_length: int
     samples_per_symbol: int
     frame_symbols: int | None
     pure_pulse_shape: str
     rrc_alpha: float | None
     gmsk_bt: float | None
+    message_bandwidth: float | None
     am_modulation_index: float | None
     fm_deviation: float | None
 
@@ -65,11 +67,11 @@ class SimulationParameters:
 
 @dataclass(frozen=True)
 class SimulationResult:
-    """The four-part record used by RID2026 dataset storage."""
+    """Complete four-part result returned by the simulation core."""
 
     y_rx: np.ndarray
     modulation: str
-    x_pure: np.ndarray
+    x_ref: np.ndarray
     parameters: SimulationParameters
 
 
@@ -119,15 +121,17 @@ class RFSignalGenerator:
             rng,
         )
 
-        x_pure = unit_power(crop_signal(
+        x_ref = unit_power(crop_signal(
             waveform.pure, guard_samples, config.frame_length
         ))
-        x_tx = unit_power(crop_signal(
+        x_tx_window = crop_signal(
             waveform.transmitted, guard_samples, config.frame_length
-        ))
-        y_rx = crop_signal(full_received, guard_samples, config.frame_length).astype(
-            np.complex64
         )
+        tx_scale = float(np.sqrt(np.mean(np.abs(x_tx_window) ** 2)))
+        x_tx = (x_tx_window / tx_scale).astype(np.complex64)
+        y_rx = (
+            crop_signal(full_received, guard_samples, config.frame_length) / tx_scale
+        ).astype(np.complex64)
 
         if waveform.source_symbols is None:
             frame_symbols = None
@@ -158,11 +162,13 @@ class RFSignalGenerator:
             waveform.source_message, guard_samples, config.frame_length
         )
         waveform_parameters = WaveformParameters(
+            frame_length=config.frame_length,
             samples_per_symbol=waveform.samples_per_symbol,
             frame_symbols=frame_symbols,
             pure_pulse_shape=waveform.pure_pulse_shape,
             rrc_alpha=waveform.rrc_alpha,
             gmsk_bt=waveform.gmsk_bt,
+            message_bandwidth=waveform.message_bandwidth,
             am_modulation_index=waveform.am_modulation_index,
             fm_deviation=waveform.fm_deviation,
         )
@@ -176,4 +182,4 @@ class RFSignalGenerator:
             sample_seed=seed,
             guard_samples=guard_samples,
         )
-        return SimulationResult(y_rx, modulation, x_pure, parameters)
+        return SimulationResult(y_rx, modulation, x_ref, parameters)

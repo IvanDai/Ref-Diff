@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+
 @dataclass(frozen=True)
 class ImpairmentParameters:
     """Parameters for a complex-baseband receive chain.
@@ -21,6 +22,7 @@ class ImpairmentParameters:
     carrier_offset: float
     delay_spread: float
     channel_taps: np.ndarray
+    channel_path_count: int | None = None
 
     def __post_init__(self) -> None:
         scalar_values = (
@@ -45,6 +47,8 @@ class ImpairmentParameters:
             raise ValueError("channel_taps must contain only finite values")
         if not np.any(np.abs(taps) > 0):
             raise ValueError("channel_taps must have non-zero energy")
+        if self.channel_path_count is not None and self.channel_path_count < 1:
+            raise ValueError("channel_path_count must be positive when provided")
 
     @classmethod
     def identity(cls, channel_taps: int = 1) -> ImpairmentParameters:
@@ -52,7 +56,7 @@ class ImpairmentParameters:
             raise ValueError("channel_taps must be positive")
         taps = np.zeros(channel_taps, dtype=np.complex64)
         taps[0] = 1.0
-        return cls(float("inf"), 0.0, 0.0, 0.0, 0.0, 0.0, taps)
+        return cls(float("inf"), 0.0, 0.0, 0.0, 0.0, 0.0, taps, 1)
 
 
 def sample_path_delays(
@@ -255,4 +259,5 @@ def sample_parameters(
         carrier_offset,
         delay_spread,
         taps,
+        int(config.get("channel_paths", 16)),
     )

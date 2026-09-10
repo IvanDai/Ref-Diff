@@ -26,6 +26,7 @@ class Waveform:
     source_message: np.ndarray | None = None
     pure_pulse_shape: str = "rectangular"
     gmsk_bt: float | None = None
+    message_bandwidth: float | None = None
     am_modulation_index: float | None = None
     fm_deviation: float | None = None
 
@@ -283,6 +284,7 @@ def _analog(
         None,
         source_message=message.astype(np.float32),
         pure_pulse_shape="analog",
+        message_bandwidth=message_bandwidth,
         **metadata,
     )
 

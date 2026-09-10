@@ -1,0 +1,29 @@
+seed: 233
+write_batch_size: 40
+examples_per_condition: 40
+
+signal:
+  frame_length: 1024
+  modulations: null
+  samples_per_symbol: [8]
+  guard_symbols: 32
+  rrc_alpha: [0.1, 0.4]
+  gmsk_bt: 0.3
+  message_bandwidth: 0.2
+  am_modulation_index: 1.0
+  fm_deviation: 0.35
+
+impairments:
+  esn0_db: [-20, -18, -16, -14, -12, -10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
+  timing_offset: [0.0, 16.0]
+  sigma_clk: 0.0001
+  delay_spreads: [0.0, 0.5, 1.0, 2.0]
+  max_channel_taps: 32
+  channel_paths: 16
+  enabled:
+    awgn: true
+    timing_offset: true
+    symbol_rate_offset: true
+    phase_offset: true
+    carrier_offset: true
+    multipath: true

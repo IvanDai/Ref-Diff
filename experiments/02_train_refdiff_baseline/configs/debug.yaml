@@ -1,0 +1,32 @@
+seed: 233
+device: auto
+
+dataset:
+  path: datasets/rid2026/rid2026_debug.h5
+  split_counts: {train: 32, valid: 4, test: 4}
+  modulations: [QPSK, 16QAM]
+  esn0_values: [10]
+
+model:
+  base_channels: 8
+  channel_multipliers: [1, 2, 4]
+
+diffusion:
+  timesteps: 20
+  schedule: cosine
+
+training:
+  epochs: 1
+  batch_size: 4
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  ema_decay: 0.9
+  gradient_clip: 1.0
+  num_workers: 0
+  condition_batched: true
+  log_interval: 1
+  max_train_batches: 2
+  max_valid_batches: 1
+  restoration_interval: 1
+  restoration_samples: 4
+  ddim_steps: 4

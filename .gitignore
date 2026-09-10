@@ -54,12 +54,17 @@ tensorboard/
 # Project-specific exclusions
 Preserved/
 Reference/
+references/
+archive/
 
-# Track only README files inside Datasets (case-insensitive filename).
-Datasets/**
-!Datasets/[Rr][Ee][Aa][Dd][Mm][Ee].[Mm][Dd]
+# Track only README files inside datasets (case-insensitive filename).
+datasets/**
+!datasets/**/
+!datasets/**/[Rr][Ee][Aa][Dd][Mm][Ee].[Mm][Dd]
 
 # Ignore every Markdown file except README files (case-insensitive filename).
 *.[Mm][Dd]
 ![Rr][Ee][Aa][Dd][Mm][Ee].[Mm][Dd]
 !**/[Rr][Ee][Aa][Dd][Mm][Ee].[Mm][Dd]
+![Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+!docs/**/*.[Mm][Dd]
