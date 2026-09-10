@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 
@@ -68,6 +69,7 @@ class GaussianDiffusion(torch.nn.Module):
         *,
         steps: int = 50,
         initial_noise: torch.Tensor | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> torch.Tensor:
         if not 1 <= steps <= self.timesteps:
             raise ValueError("DDIM steps must be between 1 and the training timesteps")
@@ -87,8 +89,12 @@ class GaussianDiffusion(torch.nn.Module):
             clean = self.predict_clean(sample, predicted_noise, timestep)
             if index == len(schedule) - 1:
                 sample = clean
+                if progress_callback is not None:
+                    progress_callback(index + 1, len(schedule))
                 continue
             next_timestep = torch.full_like(timestep, int(schedule[index + 1].item()))
             alpha_next = self._extract(self.alpha_bar, next_timestep, sample.ndim)
             sample = alpha_next.sqrt() * clean + (1 - alpha_next).sqrt() * predicted_noise
+            if progress_callback is not None:
+                progress_callback(index + 1, len(schedule))
         return sample

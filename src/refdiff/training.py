@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -91,10 +92,14 @@ def train_epoch(
     gradient_clip: float = 1.0,
     max_batches: int | None = None,
     log_interval: int | None = None,
+    progress_callback: Callable[[int, int, dict[str, float]], None] | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
     batches = 0
+    total_batches = len(loader)
+    if max_batches is not None:
+        total_batches = min(total_batches, max_batches)
     for batch in _limited(loader, max_batches):
         target = batch["target"].to(device)
         condition = batch["condition"].to(device)
@@ -108,7 +113,13 @@ def train_epoch(
         ema.update(model)
         total_loss += loss.item()
         batches += 1
-        if log_interval and batches % log_interval == 0:
+        if progress_callback is not None:
+            progress_callback(
+                batches,
+                total_batches,
+                {"loss": loss.item(), "mean_loss": total_loss / batches},
+            )
+        if progress_callback is None and log_interval and batches % log_interval == 0:
             print(f"train_step={batches} mean_loss={total_loss / batches:.6f}")
     if batches == 0:
         raise ValueError("training loader produced no batches")
@@ -124,6 +135,7 @@ def validate_noise(
     *,
     max_batches: int | None = None,
     seed: int = 0,
+    progress_callback: Callable[[int, int, dict[str, float]], None] | None = None,
 ) -> ValidationResult:
     model.eval()
     totals = torch.zeros(3, dtype=torch.float64)
@@ -131,6 +143,10 @@ def validate_noise(
     total_squared_error = 0.0
     total_elements = 0
     generator = torch.Generator(device=device).manual_seed(seed)
+    batches = 0
+    total_batches = len(loader)
+    if max_batches is not None:
+        total_batches = min(total_batches, max_batches)
     for batch in _limited(loader, max_batches):
         target = batch["target"].to(device)
         condition = batch["condition"].to(device)
@@ -157,6 +173,13 @@ def validate_noise(
                 counts[bin_index] += selected.numel()
         total_squared_error += (prediction - noise).square().sum().item()
         total_elements += noise.numel()
+        batches += 1
+        if progress_callback is not None:
+            progress_callback(
+                batches,
+                total_batches,
+                {"mean_loss": total_squared_error / total_elements},
+            )
     if total_elements == 0:
         raise ValueError("validation loader produced no batches")
     values = [
@@ -175,6 +198,7 @@ def validate_restoration(
     steps: int,
     sample_count: int,
     seed: int,
+    progress_callback: Callable[[int, int, dict[str, float]], None] | None = None,
 ) -> dict[str, float]:
     model.eval()
     restored_parts = []
@@ -182,7 +206,9 @@ def validate_restoration(
     raw_parts = []
     seen = 0
     generator = torch.Generator(device=device).manual_seed(seed)
-    for batch in loader:
+    total_batches = min(len(loader), math.ceil(sample_count / loader.batch_size))
+    total_steps = total_batches * steps
+    for batch_index, batch in enumerate(loader):
         remaining = sample_count - seen
         if remaining <= 0:
             break
@@ -195,7 +221,19 @@ def validate_restoration(
             generator=generator,
         )
         restored = diffusion.ddim_sample(
-            model, condition, steps=steps, initial_noise=initial_noise
+            model,
+            condition,
+            steps=steps,
+            initial_noise=initial_noise,
+            progress_callback=(
+                lambda current, _total, offset=batch_index * steps: progress_callback(
+                    offset + current,
+                    total_steps,
+                    {"samples": float(seen)},
+                )
+                if progress_callback is not None
+                else None
+            ),
         )
         restored_parts.append(restored.cpu())
         target_parts.append(target.cpu())

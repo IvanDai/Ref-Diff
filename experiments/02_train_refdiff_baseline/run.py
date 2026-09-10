@@ -9,6 +9,7 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 import numpy as np
 import torch
@@ -48,6 +49,86 @@ class Tee:
             stream.flush()
 
 
+class ProgressBar:
+    """Single-line terminal progress whose completed line is persisted once."""
+
+    def __init__(
+        self,
+        label: str,
+        console: TextIO,
+        log: TextIO,
+        *,
+        width: int = 24,
+        unit: str = "batch",
+        min_interval: float = 0.2,
+    ) -> None:
+        self.label = label
+        self.console = console
+        self.log = log
+        self.width = width
+        self.unit = unit
+        self.min_interval = min_interval
+        self.started = time.monotonic()
+        self.last_rendered = 0.0
+        self.last_line = ""
+
+    @staticmethod
+    def _duration(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def update(self, current: int, total: int, metrics: dict[str, float]) -> None:
+        now = time.monotonic()
+        if current < total and now - self.last_rendered < self.min_interval:
+            return
+        self.last_rendered = now
+        elapsed = max(now - self.started, 1e-9)
+        fraction = min(current / max(total, 1), 1.0)
+        filled = min(int(fraction * self.width), self.width)
+        bar = "#" * filled + "-" * (self.width - filled)
+        rate = current / elapsed
+        eta = (total - current) / rate if rate > 0 else 0.0
+        details = []
+        if "loss" in metrics:
+            details.append(f"loss={metrics['loss']:.5f}")
+        if "mean_loss" in metrics:
+            details.append(f"mean={metrics['mean_loss']:.5f}")
+        details.append(f"{rate:.2f} {self.unit}/s")
+        details.append(f"ETA {self._duration(eta)}")
+        self.last_line = (
+            f"{self.label:<18} [{bar}] {current:>{len(str(total))}}/{total} "
+            f"{fraction:6.1%}  " + "  ".join(details)
+        )
+        self.console.write(f"\r\x1b[2K{self.last_line}")
+        self.console.flush()
+
+    def close(self) -> None:
+        if not self.last_line:
+            return
+        self.console.write("\n")
+        self.console.flush()
+        self.log.write(self.last_line + "\n")
+        self.log.flush()
+
+
+def format_epoch_summary(epoch: int, total_epochs: int, metrics: dict) -> str:
+    summary = (
+        f"Epoch {epoch}/{total_epochs} Summary | "
+        f"train={metrics['train_loss']:.5f}  valid={metrics['valid_loss']:.5f}  "
+        f"timestep(low/mid/high)={metrics['valid_low_t_loss']:.5f}/"
+        f"{metrics['valid_middle_t_loss']:.5f}/{metrics['valid_high_t_loss']:.5f}"
+    )
+    if "restoration_nmse_db" in metrics:
+        summary += (
+            f"  NMSE(restored/raw)={metrics['restoration_nmse_db']:.2f}/"
+            f"{metrics['raw_nmse_db']:.2f} dB"
+        )
+    summary += f"  elapsed={ProgressBar._duration(metrics['elapsed_seconds'])}"
+    return summary
+
+
 def create_run_directory() -> tuple[Path, datetime]:
     started_at = datetime.now().astimezone()
     output_root = Path(__file__).with_name("outputs")
@@ -81,7 +162,13 @@ def build_dataset(config: dict, split: str) -> RID2026Pairs:
     )
 
 
-def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
+def run(
+    config_path: Path,
+    output_dir: Path,
+    started_at: datetime,
+    console: TextIO,
+    log: TextIO,
+) -> None:
     with config_path.open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
 
@@ -161,27 +248,43 @@ def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
         f"valid_examples={len(valid_set)} parameters={sum(p.numel() for p in model.parameters())}"
     )
 
-    for epoch in range(1, int(training_config["epochs"]) + 1):
+    total_epochs = int(training_config["epochs"])
+    for epoch in range(1, total_epochs + 1):
         started = time.monotonic()
-        train_loss = train_epoch(
-            model,
-            diffusion,
-            train_loader,
-            optimizer,
-            device,
-            ema,
-            gradient_clip=float(training_config.get("gradient_clip", 1.0)),
-            max_batches=training_config.get("max_train_batches"),
-            log_interval=training_config.get("log_interval"),
+        train_progress = ProgressBar(
+            f"Epoch {epoch}/{total_epochs} Train", console, log
         )
-        validation = validate_noise(
-            ema.model,
-            diffusion,
-            valid_loader,
-            device,
-            max_batches=training_config.get("max_valid_batches"),
-            seed=seed + 20_000,
+        try:
+            train_loss = train_epoch(
+                model,
+                diffusion,
+                train_loader,
+                optimizer,
+                device,
+                ema,
+                gradient_clip=float(training_config.get("gradient_clip", 1.0)),
+                max_batches=training_config.get("max_train_batches"),
+                log_interval=training_config.get("log_interval"),
+                progress_callback=train_progress.update,
+            )
+        finally:
+            train_progress.close()
+
+        valid_progress = ProgressBar(
+            f"Epoch {epoch}/{total_epochs} Valid", console, log
         )
+        try:
+            validation = validate_noise(
+                ema.model,
+                diffusion,
+                valid_loader,
+                device,
+                max_batches=training_config.get("max_valid_batches"),
+                seed=seed + 20_000,
+                progress_callback=valid_progress.update,
+            )
+        finally:
+            valid_progress.close()
         metrics = {
             "epoch": epoch,
             "train_loss": train_loss,
@@ -193,16 +296,26 @@ def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
         interval = int(training_config["restoration_interval"])
         should_stop = False
         is_best = False
-        if epoch % interval == 0 or epoch == int(training_config["epochs"]):
-            restoration = validate_restoration(
-                ema.model,
-                diffusion,
-                restoration_loader,
-                device,
-                steps=int(training_config["ddim_steps"]),
-                sample_count=restoration_count,
-                seed=seed + 10_000,
+        if epoch % interval == 0 or epoch == total_epochs:
+            restore_progress = ProgressBar(
+                f"Epoch {epoch}/{total_epochs} Restore",
+                console,
+                log,
+                unit="step",
             )
+            try:
+                restoration = validate_restoration(
+                    ema.model,
+                    diffusion,
+                    restoration_loader,
+                    device,
+                    steps=int(training_config["ddim_steps"]),
+                    sample_count=restoration_count,
+                    seed=seed + 10_000,
+                    progress_callback=restore_progress.update,
+                )
+            finally:
+                restore_progress.close()
             metrics.update(restoration)
             if restoration["restoration_nmse"] < best_nmse:
                 best_nmse = restoration["restoration_nmse"]
@@ -232,7 +345,7 @@ def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
         save_checkpoint(
             output_dir / "last.pt", model, ema, optimizer, epoch, config, metrics
         )
-        print(json.dumps(metrics, sort_keys=True))
+        print(format_epoch_summary(epoch, total_epochs, metrics))
         if should_stop:
             print(
                 "early_stopping: "
@@ -247,12 +360,13 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     output_dir, started_at = create_run_directory()
+    console_stdout = sys.stdout
     with (output_dir / "run.log").open("w", encoding="utf-8", buffering=1) as log:
         stdout = Tee(sys.stdout, log)
         stderr = Tee(sys.stderr, log)
         with redirect_stdout(stdout), redirect_stderr(stderr):
             try:
-                run(args.config, output_dir, started_at)
+                run(args.config, output_dir, started_at, console_stdout, log)
             except Exception:
                 traceback.print_exc()
                 return 1
