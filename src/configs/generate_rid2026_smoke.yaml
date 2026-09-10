@@ -1,0 +1,48 @@
+seed: 233
+shard_size: 64
+
+signal:
+  frame_length: 1024
+  modulations: [BPSK, QPSK, 16QAM]
+  samples_per_symbol: [8]
+  guard_symbols: 32
+  rrc_alpha: [0.1, 0.4]
+  gmsk_bt: 0.3
+  message_bandwidth: 0.2
+  am_modulation_index: 1.0
+  fm_deviation: 0.35
+
+impairments:
+  esn0_db: [0, 10]
+  timing_offset: [0.0, 16.0]
+  sigma_clk: 0.0001
+  delay_spreads: [0.0, 0.5, 1.0, 2.0]
+  max_channel_taps: 32
+  channel_paths: 16
+  enabled:
+    awgn: true
+    timing_offset: true
+    symbol_rate_offset: true
+    phase_offset: true
+    carrier_offset: true
+    multipath: true
+
+profiles:
+  awgn_only:
+    enabled:
+      timing_offset: false
+      symbol_rate_offset: false
+      phase_offset: false
+      carrier_offset: false
+      multipath: false
+  phase_cfo:
+    enabled:
+      timing_offset: false
+      symbol_rate_offset: false
+      multipath: false
+  rml2018_full: {}
+
+splits:
+  train: 4
+  valid: 1
+  test: 1

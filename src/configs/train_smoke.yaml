@@ -1,0 +1,27 @@
+seed: 233
+device: auto
+output_dir: outputs/smoke
+
+dataset:
+  root: datasets/smoke
+  target: x_pure
+  filters:
+    profiles: [awgn_only]
+    modulations: [BPSK, QPSK]
+    esn0_db: [0, 10]
+
+model:
+  base_channels: 16
+  channel_mults: [1, 2, 4]
+
+diffusion:
+  timesteps: 100
+  beta_start: 0.0001
+  beta_end: 0.02
+
+training:
+  epochs: 1
+  batch_size: 4
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  num_workers: 0

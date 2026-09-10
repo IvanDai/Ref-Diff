@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rfstyle"
+version = "0.1.0"
+description = "RML2018-compatible signal generation and conditional 1D diffusion baseline"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "h5py>=3.9",
+  "PyYAML>=6.0",
+  "torch>=2.2",
+  "tqdm>=4.66",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["rfstyle*", "rid2026*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "rid2026/tests"]
