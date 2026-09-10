@@ -41,6 +41,38 @@ class ValidationResult:
     high_t_loss: float
 
 
+@dataclass
+class EarlyStopping:
+    """Stop after restoration NMSE fails to improve meaningfully."""
+
+    patience: int
+    min_epochs: int = 0
+    min_relative_improvement: float = 0.0
+    best: float = math.inf
+    bad_evaluations: int = 0
+
+    def __post_init__(self) -> None:
+        if self.patience < 1:
+            raise ValueError("early-stopping patience must be positive")
+        if self.min_epochs < 0:
+            raise ValueError("early-stopping min_epochs cannot be negative")
+        if not 0 <= self.min_relative_improvement < 1:
+            raise ValueError(
+                "early-stopping min_relative_improvement must be in [0, 1)"
+            )
+
+    def update(self, value: float, epoch: int) -> bool:
+        if not math.isfinite(value):
+            raise ValueError("early-stopping metric must be finite")
+        threshold = self.best * (1 - self.min_relative_improvement)
+        if value < threshold:
+            self.best = value
+            self.bad_evaluations = 0
+        else:
+            self.bad_evaluations += 1
+        return epoch >= self.min_epochs and self.bad_evaluations >= self.patience
+
+
 def _limited(loader: Iterable, max_batches: int | None):
     for index, batch in enumerate(loader):
         if max_batches is not None and index >= max_batches:

@@ -1,7 +1,7 @@
 import torch
 
 from refdiff import ConditionalUNet1D, GaussianDiffusion, nmse
-from refdiff.training import ExponentialMovingAverage, validate_noise
+from refdiff.training import EarlyStopping, ExponentialMovingAverage, validate_noise
 
 
 def test_conditional_unet_diffusion_forward_backward_and_ddim():
@@ -66,3 +66,28 @@ def test_noise_validation_reports_all_timestep_thirds():
             result.high_t_loss,
         )
     )
+
+
+def test_early_stopping_uses_relative_improvement_patience_and_minimum_epoch():
+    stopping = EarlyStopping(
+        patience=3,
+        min_epochs=5,
+        min_relative_improvement=0.01,
+    )
+
+    assert not stopping.update(1.0, epoch=1)
+    assert not stopping.update(0.995, epoch=2)
+    assert not stopping.update(0.994, epoch=3)
+    assert stopping.update(0.993, epoch=5)
+    assert stopping.best == 1.0
+
+
+def test_early_stopping_resets_patience_after_meaningful_improvement():
+    stopping = EarlyStopping(patience=2, min_relative_improvement=0.01)
+
+    assert not stopping.update(1.0, epoch=1)
+    assert not stopping.update(0.98, epoch=2)
+    assert stopping.best == 0.98
+    assert stopping.bad_evaluations == 0
+    assert not stopping.update(0.975, epoch=3)
+    assert stopping.update(0.974, epoch=4)

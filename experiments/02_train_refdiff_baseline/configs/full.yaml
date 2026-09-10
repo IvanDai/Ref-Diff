@@ -16,7 +16,7 @@ diffusion:
   schedule: cosine
 
 training:
-  epochs: 10
+  epochs: 200
   batch_size: 64
   learning_rate: 0.0002
   weight_decay: 0.0001
@@ -30,3 +30,8 @@ training:
   restoration_interval: 1
   restoration_samples: 256
   ddim_steps: 50
+  early_stopping:
+    enabled: true
+    min_epochs: 20
+    patience: 20
+    min_relative_improvement: 0.001

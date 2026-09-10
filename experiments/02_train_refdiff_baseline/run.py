@@ -23,6 +23,7 @@ if str(SOURCE_ROOT) not in sys.path:
 from refdiff import ConditionalUNet1D, GaussianDiffusion, RID2026Pairs
 from refdiff.data import ConditionBatchSampler
 from refdiff.training import (
+    EarlyStopping,
     ExponentialMovingAverage,
     save_checkpoint,
     train_epoch,
@@ -140,6 +141,18 @@ def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
     )
     history = []
     best_nmse = float("inf")
+    early_config = training_config.get("early_stopping")
+    early_stopping = (
+        EarlyStopping(
+            patience=int(early_config["patience"]),
+            min_epochs=int(early_config.get("min_epochs", 0)),
+            min_relative_improvement=float(
+                early_config.get("min_relative_improvement", 0.0)
+            ),
+        )
+        if early_config and early_config.get("enabled", True)
+        else None
+    )
     print(f"started_at={started_at.isoformat()}")
     print(f"config={config_path.resolve()}")
     print(f"output_dir={output_dir.resolve()}")
@@ -178,6 +191,8 @@ def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
             "valid_high_t_loss": validation.high_t_loss,
         }
         interval = int(training_config["restoration_interval"])
+        should_stop = False
+        is_best = False
         if epoch % interval == 0 or epoch == int(training_config["epochs"]):
             restoration = validate_restoration(
                 ema.model,
@@ -191,22 +206,40 @@ def run(config_path: Path, output_dir: Path, started_at: datetime) -> None:
             metrics.update(restoration)
             if restoration["restoration_nmse"] < best_nmse:
                 best_nmse = restoration["restoration_nmse"]
-                save_checkpoint(
-                    output_dir / "best.pt",
-                    model,
-                    ema,
-                    optimizer,
-                    epoch,
-                    config,
-                    metrics,
+                is_best = True
+            if early_stopping is not None:
+                should_stop = early_stopping.update(
+                    restoration["restoration_nmse"], epoch
                 )
+                metrics["early_stopping_bad_evaluations"] = (
+                    early_stopping.bad_evaluations
+                )
+                metrics["early_stopping_best_nmse"] = early_stopping.best
+                metrics["stopped_early"] = should_stop
         metrics["elapsed_seconds"] = time.monotonic() - started
         history.append(metrics)
         write_history(output_dir / "history.json", history)
+        if is_best:
+            save_checkpoint(
+                output_dir / "best.pt",
+                model,
+                ema,
+                optimizer,
+                epoch,
+                config,
+                metrics,
+            )
         save_checkpoint(
             output_dir / "last.pt", model, ema, optimizer, epoch, config, metrics
         )
         print(json.dumps(metrics, sort_keys=True))
+        if should_stop:
+            print(
+                "early_stopping: "
+                f"epoch={epoch} patience={early_stopping.patience} "
+                f"best_nmse={early_stopping.best:.8g}"
+            )
+            break
 
 
 def main() -> int:

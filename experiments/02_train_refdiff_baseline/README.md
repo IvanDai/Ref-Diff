@@ -53,3 +53,9 @@ outputs/YYYYMMDD_HHMMSS/
 `run.log` receives both stdout and stderr while retaining live console output.
 This keeps the complete training progress or traceback together with the
 configuration and checkpoints that produced it.
+
+The full configuration runs for at most 200 epochs. Starting at epoch 20,
+training stops when 20 consecutive restoration evaluations fail to improve
+strict validation NMSE by at least 0.1% relative to the current early-stopping
+reference. `best.pt` always retains the checkpoint with the lowest observed
+validation restoration NMSE.
