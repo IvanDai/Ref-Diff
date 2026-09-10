@@ -142,6 +142,16 @@ def create_run_directory() -> tuple[Path, datetime]:
     return output_dir, started_at
 
 
+def open_console() -> tuple[TextIO, bool]:
+    """Return a live terminal stream even when `conda run` captures stdout."""
+    if sys.stdout.isatty():
+        return sys.stdout, False
+    try:
+        return open("/dev/tty", "w", encoding="utf-8", buffering=1), True
+    except OSError:
+        return sys.stdout, False
+
+
 def choose_device(requested: str) -> torch.device:
     if requested != "auto":
         return torch.device(requested)
@@ -360,17 +370,21 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     output_dir, started_at = create_run_directory()
-    console_stdout = sys.stdout
-    with (output_dir / "run.log").open("w", encoding="utf-8", buffering=1) as log:
-        stdout = Tee(sys.stdout, log)
-        stderr = Tee(sys.stderr, log)
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            try:
-                run(args.config, output_dir, started_at, console_stdout, log)
-            except Exception:
-                traceback.print_exc()
-                return 1
-    return 0
+    console, close_console = open_console()
+    try:
+        with (output_dir / "run.log").open("w", encoding="utf-8", buffering=1) as log:
+            stdout = Tee(console, log)
+            stderr = Tee(console, log)
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                try:
+                    run(args.config, output_dir, started_at, console, log)
+                except Exception:
+                    traceback.print_exc()
+                    return 1
+        return 0
+    finally:
+        if close_console:
+            console.close()
 
 
 if __name__ == "__main__":

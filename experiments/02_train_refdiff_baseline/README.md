@@ -23,7 +23,8 @@ checkpoint is selected by validation restoration NMSE.
 From the repository root:
 
 ```bash
-conda run -n rfsig python experiments/02_train_refdiff_baseline/run.py \
+conda run --no-capture-output -n rfsig python \
+  experiments/02_train_refdiff_baseline/run.py \
   --config experiments/02_train_refdiff_baseline/configs/debug.yaml
 ```
 
@@ -35,7 +36,8 @@ training batches and four DDIM steps so it can finish locally.
 After placing the full RID2026 file at the path in `configs/full.yaml`:
 
 ```bash
-conda run -n rfsig python experiments/02_train_refdiff_baseline/run.py \
+conda run --no-capture-output -n rfsig python \
+  experiments/02_train_refdiff_baseline/run.py \
   --config experiments/02_train_refdiff_baseline/configs/full.yaml
 ```
 
