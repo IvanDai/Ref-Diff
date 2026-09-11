@@ -8,6 +8,7 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 import numpy as np
 import torch
@@ -47,6 +48,51 @@ class Tee:
             stream.flush()
 
 
+class ProgressBar:
+    """Render progress in one terminal line and persist only its final state."""
+
+    def __init__(self, label: str, console: TextIO, log: TextIO, *, unit: str = "batch"):
+        self.label, self.console, self.log, self.unit = label, console, log, unit
+        self.started = __import__("time").monotonic()
+        self.last_rendered = 0.0
+        self.last_line = ""
+
+    @staticmethod
+    def duration(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def update(self, current: int, total: int, metrics: dict[str, float]) -> None:
+        import time
+        now = time.monotonic()
+        if current < total and now - self.last_rendered < 0.2:
+            return
+        self.last_rendered = now
+        elapsed = max(now - self.started, 1e-9)
+        fraction = min(current / max(total, 1), 1.0)
+        width = 24
+        filled = min(int(fraction * width), width)
+        details = []
+        if "loss" in metrics:
+            details.append(f"loss={metrics['loss']:.5f}")
+        if "mean_loss" in metrics:
+            details.append(f"mean={metrics['mean_loss']:.5f}")
+        rate = current / elapsed
+        details.extend((f"{rate:.2f} {self.unit}/s", f"ETA {self.duration((total-current)/rate if rate else 0)}"))
+        self.last_line = f"{self.label:<20} [{'#' * filled}{'-' * (width-filled)}] {current}/{total} {fraction:6.1%}  " + "  ".join(details)
+        self.console.write("\r\x1b[2K" + self.last_line)
+        self.console.flush()
+
+    def close(self) -> None:
+        if self.last_line:
+            self.console.write("\n")
+            self.console.flush()
+            self.log.write(self.last_line + "\n")
+            self.log.flush()
+
+
 def create_run_directory() -> tuple[Path, datetime]:
     started_at = datetime.now().astimezone()
     root = Path(__file__).with_name("outputs")
@@ -70,6 +116,15 @@ def choose_device(requested: str) -> torch.device:
     return torch.device("cpu")
 
 
+def open_console() -> tuple[TextIO, bool]:
+    if sys.stdout.isatty():
+        return sys.stdout, False
+    try:
+        return open("/dev/tty", "w", encoding="utf-8", buffering=1), True
+    except OSError:
+        return sys.stdout, False
+
+
 def make_dataset(config: dict, split: str) -> RID2026TimeDomainPairs:
     return RID2026TimeDomainPairs(
         config["path"], split, config["split_counts"],
@@ -77,7 +132,7 @@ def make_dataset(config: dict, split: str) -> RID2026TimeDomainPairs:
     )
 
 
-def run(config_path: Path, output: Path, started_at: datetime) -> None:
+def run(config_path: Path, output: Path, started_at: datetime, console: TextIO, log: TextIO) -> None:
     with config_path.open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     seed = int(config.get("seed", 233))
@@ -127,16 +182,28 @@ def run(config_path: Path, output: Path, started_at: datetime) -> None:
     print(f"started_at={started_at.isoformat()}\nconfig={config_path.resolve()}\noutput_dir={output.resolve()}")
     print(f"version=refdiff_1_1 domain=time device={device} train_examples={len(train_set)} valid_examples={len(valid_set)}")
     total_epochs = int(training["epochs"])
+    import time
     for epoch in range(1, total_epochs + 1):
-        train_loss = train_epoch(
+        epoch_started = time.monotonic()
+        train_progress = ProgressBar(f"Epoch {epoch}/{total_epochs} Train", console, log)
+        try:
+            train_loss = train_epoch(
             model, diffusion, train_loader, optimizer, device, ema,
             gradient_clip=float(training.get("gradient_clip", 1.0)),
             max_batches=training.get("max_train_batches"),
-        )
-        validation = validate_noise(
+            progress_callback=train_progress.update,
+            )
+        finally:
+            train_progress.close()
+        valid_progress = ProgressBar(f"Epoch {epoch}/{total_epochs} Valid", console, log)
+        try:
+            validation = validate_noise(
             ema.model, diffusion, valid_loader, device,
             max_batches=training.get("max_valid_batches"), seed=seed + 20_000,
-        )
+            progress_callback=valid_progress.update,
+            )
+        finally:
+            valid_progress.close()
         metrics = {
             "epoch": epoch, "train_loss": train_loss, "valid_loss": validation.loss,
             "valid_low_t_loss": validation.low_t_loss,
@@ -145,11 +212,16 @@ def run(config_path: Path, output: Path, started_at: datetime) -> None:
         }
         should_stop = False
         if epoch % int(training["restoration_interval"]) == 0 or epoch == total_epochs:
-            restoration = validate_restoration(
+            restore_progress = ProgressBar(f"Epoch {epoch}/{total_epochs} Restore", console, log, unit="step")
+            try:
+                restoration = validate_restoration(
                 ema.model, diffusion, restoration_loader, device,
                 steps=int(training["ddim_steps"]), sample_count=restoration_count,
                 seed=seed + 10_000,
-            )
+                progress_callback=restore_progress.update,
+                )
+            finally:
+                restore_progress.close()
             metrics.update(restoration)
             if restoration["restoration_nmse"] < best_nmse:
                 best_nmse = restoration["restoration_nmse"]
@@ -164,7 +236,11 @@ def run(config_path: Path, output: Path, started_at: datetime) -> None:
         history.append(metrics)
         write_history(output / "history.json", history)
         save_checkpoint(output / "refdiff_1_1_last.pt", model, ema, optimizer, epoch, config, metrics)
-        print(json.dumps(metrics, sort_keys=True))
+        print(
+            f"Epoch {epoch}/{total_epochs} Summary | train={train_loss:.5f} "
+            f"valid={validation.loss:.5f} restored_nmse={metrics.get('restoration_nmse', float('nan')):.5f} "
+            f"elapsed={ProgressBar.duration(time.monotonic() - epoch_started)}"
+        )
         if should_stop:
             break
 
@@ -174,20 +250,21 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     output, started_at = create_run_directory()
+    console, close_console = open_console()
     try:
         with (output / "run.log").open("w", encoding="utf-8", buffering=1) as log:
-            tee = Tee(sys.stdout, log)
+            tee = Tee(console, log)
             with redirect_stdout(tee), redirect_stderr(tee):
                 try:
-                    run(args.config, output, started_at)
+                    run(args.config, output, started_at, console, log)
                 except Exception:
                     traceback.print_exc()
                     return 1
         return 0
     finally:
-        pass
+        if close_console:
+            console.close()
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
