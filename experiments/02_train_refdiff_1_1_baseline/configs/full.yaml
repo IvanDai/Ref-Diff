@@ -1,0 +1,37 @@
+seed: 233
+device: auto
+
+dataset:
+  path: datasets/rid2026/rid2026.h5
+  split_counts: {train: 3276, valid: 410, test: 410}
+  modulations: null
+  esn0_values: null
+
+model:
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 8]
+
+diffusion:
+  timesteps: 1000
+  schedule: cosine
+
+training:
+  epochs: 200
+  batch_size: 64
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  ema_decay: 0.9999
+  gradient_clip: 1.0
+  num_workers: 8
+  condition_batched: true
+  max_train_batches: null
+  max_valid_batches: null
+  restoration_interval: 1
+  restoration_samples: 256
+  ddim_steps: 50
+  early_stopping:
+    enabled: true
+    min_epochs: 20
+    patience: 20
+    min_relative_improvement: 0.001
+

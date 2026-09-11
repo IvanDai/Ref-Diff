@@ -20,7 +20,7 @@ dev = ["pytest>=8.0", "matplotlib>=3.8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["rid2026*", "refdiff*"]
+include = ["rid2026*", "refdiff", "refdiff_1_1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
