@@ -7,7 +7,7 @@ ddim_steps: 50  # Must not exceed the checkpoint's diffusion.timesteps.
 
 # Required in both modes.
 parameters:
-  modulation: BPSK
+  modulation: QPSK
   esn0_db: 30
 
 # Used only when dataset is null. Omitted values follow RID2026 defaults.
