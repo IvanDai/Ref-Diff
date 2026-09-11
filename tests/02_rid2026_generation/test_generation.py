@@ -65,6 +65,25 @@ def test_identity_receive_frame_matches_stored_transmitted_frame():
     np.testing.assert_allclose(result.y_rx, result.parameters.x_tx, atol=2e-6)
 
 
+def test_reference_is_independent_of_receive_impairments():
+    config = SignalConfig(frame_length=512, samples_per_symbol=8)
+    clean = RFSignalGenerator(config).generate("QPSK", seed=233)
+    severe = ImpairmentParameters(
+        esn0_db=-20.0,
+        timing_offset=4.5,
+        symbol_rate_offset=1e-3,
+        phase_offset=1.2,
+        carrier_offset=2e-3,
+        delay_spread=1.0,
+        channel_taps=np.array([0.8 + 0.1j, 0.2 - 0.3j], dtype=np.complex64),
+        channel_path_count=2,
+    )
+    impaired = RFSignalGenerator(config).generate("QPSK", severe, seed=233)
+
+    np.testing.assert_array_equal(clean.x_ref, impaired.x_ref)
+    assert not np.array_equal(clean.y_rx, impaired.y_rx)
+
+
 def test_dataset_generator_writes_complete_contract(tmp_path: Path):
     config = load_test_config()
     config["signal"]["frame_length"] = 128

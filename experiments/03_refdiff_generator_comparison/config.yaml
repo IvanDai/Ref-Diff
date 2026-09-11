@@ -1,0 +1,23 @@
+seed: 233
+device: auto
+weights: experiments/02_train_refdiff_baseline/outputs/20260911_004325/best.pt
+# Optional: selects a stored sample; null generates a fresh random sample.
+dataset: datasets/rid2026/rid2026_debug.h5
+ddim_steps: 50  # Must not exceed the checkpoint's diffusion.timesteps.
+
+# Required in both modes.
+parameters:
+  modulation: BPSK
+  esn0_db: 30
+
+# Used only when dataset is null. Omitted values follow RID2026 defaults.
+generator:
+  # parameters:
+  #   rrc_alpha: 0.25
+  #   timing_offset: 0.0
+  #   symbol_rate_offset: 0.0
+  #   phase_offset: 0.0
+  #   carrier_offset: 0.0
+  #   delay_spread: 0.0
+  # signal:
+  #   samples_per_symbol: 8
